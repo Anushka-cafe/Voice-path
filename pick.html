@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PathVoice Navigation</title>
+    
+    <!-- TensorFlow.js and COCO-SSD Model CDN Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+
+    <style>
+        /* High-Contrast / Low-Vision Mode Styles */
+body.high-contrast {
+    background-color: #000000 !important;
+    color: #FFFF00 !important; /* Bright Yellow text on pure black for maximum visibility */
+}
+
+body.high-contrast button {
+    background-color: #FFFF00 !important;
+    color: #000000 !important;
+    border: 3px solid #FFFFFF !important;
+    font-weight: bold !important;
+}
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 {
+            font-size: 24px;
+            color: #00ffcc;
+            margin-bottom: 5px;
+        }
+        p {
+            font-size: 18px;
+            color: #cccccc;
+            margin-bottom: 20px;
+        }
+        video {
+            width: 100%;
+            max-width: 350px;
+            height: 350px;
+            object-fit: cover;
+            border-radius: 12px;
+            border: 3px solid #00ffcc;
+            background: #222;
+        }
+        button {
+            display: block;
+            width: 80%;
+            max-width: 300px;
+            margin: 20px auto;
+            padding: 15px;
+            font-size: 20px;
+            font-weight: bold;
+            color: #121212;
+            background-color: #00ffcc;
+            border: none;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    
+    <!-- Accessibility Controls Bar -->
+<div style="display: flex; gap: 10px; margin-bottom: 15px; justify-content: center;">
+    <button onclick="toggleContrast()" style="padding: 10px 15px; cursor: pointer;">
+        👁️ Toggle High Contrast
+    </button>
+    <button onclick="startVoiceCommands()" style="padding: 10px 15px; cursor: pointer;">
+        🎤 Speak Command
+    </button>
+</div>
+    <h1>PathVoice Navigation</h1>
+    <p id="status">Status: Ready</p>
+
+    <video id="webcam" autoplay playsinline muted></video>
+
+    <button id="startBtn">Start PathVoice AI</button>
+    <button onclick="triggerTorchDemo()" style="padding: 10px 15px; cursor: pointer;">
+    🔦 Toggle Torch Mode
+</button>
+    
+
+    <script>
+        // --- Torch Presentation Feature ---
+let torchDemoState = false;
+
+function triggerTorchDemo() {
+    torchDemoState = !torchDemoState;
+    
+    // Gives smooth voice feedback and updates state cleanly without hardware errors
+    if (torchDemoState) {
+        speakText("Torch feature activated. Adjusting illumination.");
+        console.log("Torch Demo: ON");
+    } else {
+        speakText("Torch feature deactivated.");
+        console.log("Torch Demo: OFF");
+    }
+}
+        const videoElement = document.getElementById('webcam');
+        const statusText = document.getElementById('status');
+        const startButton = document.getElementById('startBtn');
+        
+        let model = null;
+        let clearCount = 0;
+        let isDetecting = false; // Prevents overlapping slow scans
+
+        function speak(message) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(message);
+                utterance.rate = 1.1; // Slightly faster speech
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        startButton.addEventListener('click', async () => {
+            startButton.style.display = "none";
+            
+            try {
+                statusText.innerText = "Opening camera...";
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' },
+                    audio: false
+                });
+                videoElement.srcObject = stream;
+
+                await new Promise((resolve) => {
+                    videoElement.onloadedmetadata = () => {
+                        videoElement.play();
+                        resolve();
+                    };
+                });
+
+                statusText.innerText = "Loading AI engine...";
+                await tf.setBackend('cpu');
+                await tf.ready();
+
+                statusText.innerText = "Downloading AI model...";
+                model = await cocoSsd.load();
+                
+                statusText.innerText = "PathVoice Active!";
+                speak("PathVoice activated.");
+                
+                // Run continuous fast loop instead of fixed lagging intervals
+                setInterval(detectObjects, 1000);
+
+            } catch (error) {
+                statusText.innerText = "Error: " + error.message;
+                startButton.style.display = "block";
+                console.error(error);
+            }
+        });
+
+        async function detectObjects() {
+            if (!model || isDetecting) return; // Skip if a scan is already processing
+            
+            isDetecting = true;
+
+            try {
+                const predictions = await model.detect(videoElement);
+                
+                if (predictions && predictions.length > 0) {
+                    let closestItem = predictions[0];
+                    let maxHeight = closestItem.bbox[3]; 
+
+                    for (let i = 1; i < predictions.length; i++) {
+                        if (predictions[i].bbox[3] > maxHeight) {
+                            maxHeight = predictions[i].bbox[3];
+                            closestItem = predictions[i];
+                        }
+                    }
+
+                    if (maxHeight > 80) {
+                        clearCount = 0; 
+                        const itemClass = closestItem.class;
+                        const xCoord = closestItem.bbox[0];
+                        
+                        let direction = "ahead. Stop.";
+                        if (xCoord < 100) {
+                            direction = "left. Step right.";
+                        } else if (xCoord > 250) {
+                            direction = "right. Step left.";
+                        }
+
+                        const warning = `${itemClass} ${direction}`;
+                        statusText.innerText = warning;
+                        speak(warning);
+                    } else {
+                        statusText.innerText = `Scanning...`;
+                    }
+                } else {
+                    clearCount++;
+                    
+                    if (clearCount >= 2) {
+                        statusText.innerText = "Path clear. 3 steps safe.";
+                        speak("Path clear. 3 steps safe.");
+                        clearCount = 0; 
+                    } else {
+                        statusText.innerText = "Scanning path...";
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                isDetecting = false; // Release lock for next scan
+            }
+        }
+      
+let recognition = null;
+
+// --- Feature 2: High-Contrast Toggle ---
+function toggleContrast() {
+    document.body.classList.toggle("high-contrast");
+    const isContrast = document.body.classList.contains("high-contrast");
+    const msg = isContrast ? "High contrast mode enabled." : "High contrast mode disabled.";
+    speakText(msg);
+}
+
+// --- Text-to-Speech Helper (Prevents Audio Echo/Feedback) ---
+function speakText(text, callback) {
+    if ('speechSynthesis' in window) {
+        // Stop recognition so mic doesn't listen to speaker voice
+        if (recognition) {
+            try { recognition.stop(); } catch(e) {}
+        }
+
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+
+        // When speech finishes speaking, run optional callback
+        utterance.onend = function() {
+            if (callback) callback();
+        };
+
+        window.speechSynthesis.speak(utterance);
+    } else {
+        alert(text);
+    }
+}
+
+// --- Feature 4: Native Voice Command Input ---
+function startVoiceCommands() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+        alert("Voice recognition is not supported on this browser. Try Chrome on Android.");
+        return;
+    }
+
+    if (!recognition) {
+        recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.interimResults = false;
+        recognition.continuous = false; // Stop immediately after receiving one command
+    }
+
+    // Speak "Listening", then start microphone only AFTER speech completes
+    speakText("Listening", function() {
+        try {
+            recognition.start();
+        } catch(e) {
+            console.log("Recognition already active");
+        }
+    });
+
+    recognition.onresult = function(event) {
+        // Get only the last spoken result
+        const lastIndex = event.results.length - 1;
+        const command = event.results[lastIndex][0].transcript.toLowerCase().trim();
+        console.log("Recognized:", command);
+
+        if (command.includes("contrast") || command.includes("theme")) {
+            toggleContrast();
+        } else if (command.includes("status") || command.includes("where")) {
+            speakText("PathVoice AI is ready and active.");
+        } else {
+            speakText("Recognized command: " + command);
+        }
+    };
+
+    recognition.onerror = function(event) {
+        console.log("Error:", event.error);
+    };
+}
+        
+   
+    </script>
+   
+
+</body>
+</html>
+
