@@ -74,6 +74,21 @@ body.high-contrast button {
     <button onclick="startVoiceCommands()" style="padding: 10px 15px; cursor: pointer;">
         🎤 Speak Command
     </button>
+
+</div>
+<!-- Voice Distance Trigger Button -->
+<div style="margin: 15px; padding: 15px; background: #e8f5e9; border-radius: 8px; text-align: center;">
+    <button onclick="listenForDistance()" style="background-color: #2e7d32; color: white; padding: 12px 20px; border: none; border-radius: 30px; font-size: 18px; cursor: pointer; font-weight: bold;">
+        🎙️ Say Target Distance 
+    </button>
+</div>
+
+<div id="distanceStatus" style="font-size: 18px; font-weight: bold; margin: 10px; color: #333; text-align: center;">
+    Status: Tap button and speak your target...
+</div>
+
+<div id="distanceStatus" style="font-size: 18px; font-weight: bold; margin: 10px; color: #333;">
+    Status: Waiting to start...
 </div>
     <h1>PathVoice Navigation</h1>
     <p id="status">Status: Ready</p>
@@ -291,7 +306,135 @@ function startVoiceCommands() {
     };
 }
         
-   
+  let startCoords = null;
+    let watchId = null;
+
+    function listenForDistance() {
+        // Check if browser supports Speech Recognition
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert("Speech recognition is not supported in this browser. Try Chrome on Android.");
+            return;
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        speak("Listening for distance. Please say the number of meters or kilometers.");
+        document.getElementById("distanceStatus").innerText = "Listening for your voice...";
+
+        recognition.start();
+
+        recognition.onresult = function(event) {
+            const speechText = event.results[0][0].transcript.toLowerCase();
+            console.log("Heard:", speechText);
+            
+            // Parse numbers and units from spoken text
+            const targetMeters = parseDistanceSpeech(speechText);
+
+            if (targetMeters > 0) {
+                speak(`Understood. Target set to ${targetMeters} meters. Starting GPS tracking.`);
+                document.getElementById("distanceStatus").innerText = `Target: ${targetMeters}m | Acquiring GPS...`;
+                startCustomGPSHoming(targetMeters);
+            } else {
+                speak("I couldn't catch the distance number. Please try again.");
+                document.getElementById("distanceStatus").innerText = `Could not understand "${speechText}". Try again.`;
+            }
+        };
+
+        recognition.onerror = function(event) {
+            console.error("Speech Recognition Error:", event.error);
+            speak("Voice recognition error. Please tap and try again.");
+            document.getElementById("distanceStatus").innerText = "Voice Error: " + event.error;
+        };
+    }
+
+    // Helper to extract numbers and handle "kilometers" vs "meters"
+    function parseDistanceSpeech(text) {
+        // Extract any numeric digits from the sentence (e.g., "50", "2", "1.5")
+        const match = text.match(/[\d\.]+/);
+        if (!match) return 0;
+
+        let num = parseFloat(match[0]);
+
+        // If the user said "kilometer" or "km", convert to meters
+        if (text.includes("kilometer") || text.includes("km")) {
+            num = num * 1000;
+        }
+        return num;
+    }
+
+    function startCustomGPSHoming(targetMeters) {
+        if (!navigator.geolocation) {
+            alert("Geolocation is not supported by your browser.");
+            return;
+        }
+
+        startCoords = null;
+        if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+        }
+
+        watchId = navigator.geolocation.watchPosition((position) => {
+            const currentLat = position.coords.latitude;
+            const currentLon = position.coords.longitude;
+
+            if (!startCoords) {
+                startCoords = { lat: currentLat, lon: currentLon };
+                document.getElementById("distanceStatus").innerText = `Start locked! Walking toward ${targetMeters}m...`;
+                speak("GPS position locked. Start walking.");
+                return;
+            }
+
+            const distanceMeters = calculateDistanceMeters(startCoords.lat, startCoords.lon, currentLat, currentLon);
+            document.getElementById("distanceStatus").innerText = `Moved: ${distanceMeters.toFixed(1)}m / ${targetMeters}m`;
+
+            if (distanceMeters >= targetMeters) {
+                speak(`Alert! You have successfully reached your target of ${targetMeters} meters.`);
+                document.getElementById("distanceStatus").innerText = `Target Reached! 🎉 (${distanceMeters.toFixed(1)}m)`;
+                
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+        }, (error) => {
+            console.error("GPS Error:", error);
+            if (error.code === error.TIMEOUT) {
+                document.getElementById("distanceStatus").innerText = "GPS signal weak. Step outside for open sky!";
+                speak("GPS signal weak. Please step outside under open sky.");
+            } else {
+                document.getElementById("distanceStatus").innerText = "GPS Error: " + error.message;
+            }
+        }, { 
+            enableHighAccuracy: true, 
+            maximumAge: 3000, 
+            timeout: 30000 
+        });
+    }
+
+    function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // Earth radius in meters
+        const dLat = deg2rad(lat2 - lat1);
+        const dLon = deg2rad(lon2 - lon1);
+        const a = 
+            Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+        return R * c; 
+    }
+
+    function deg2rad(deg) {
+        return deg * (Math.PI/180);
+    }
+
+    function speak(text) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(utterance);
+    }
+        
+    
     </script>
    
 
